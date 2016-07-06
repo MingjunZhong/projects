@@ -219,9 +219,13 @@ def build_cnn(input_var=None, lengthOfInputVector=None):
     print(network.output_shape)       
     return network
 
-def build_cnn_mnist(input_var=None):
+def build_cnn_mnist(input_var=None, dropout=True):
     # As a third model, we'll create a CNN of two convolution + pooling stages
     # and a fully-connected hidden layer in front of the output layer.
+    if dropout:
+        p = 0.5
+    else:
+        p = 0.0
 
     # Input layer, as usual:
     network = lasagne.layers.InputLayer(shape=(None, 1, 1, frequency),
@@ -232,7 +236,7 @@ def build_cnn_mnist(input_var=None):
     # Convolutional layer with 32 kernels of size 5x5. Strided and padded
     # convolutions are supported as well; see the docstring.
     network = lasagne.layers.Conv2DLayer(
-            network, num_filters=64, filter_size=(1, 3),
+            network, num_filters=5, filter_size=(1, 5),
             nonlinearity=lasagne.nonlinearities.rectify,
             W=lasagne.init.GlorotUniform())
     # Expert note: Lasagne provides alternative convolutional layers that
@@ -244,28 +248,28 @@ def build_cnn_mnist(input_var=None):
     #print(network.output_shape)
     # Another convolution with 32 5x5 kernels, and another 2x2 pooling:
     network = lasagne.layers.Conv2DLayer(
-            network, num_filters=64, filter_size=(1, 3),
+            network, num_filters=5, filter_size=(1, 5),
             nonlinearity=lasagne.nonlinearities.rectify)
     #network = lasagne.layers.MaxPool2DLayer(network, pool_size=(2, 2))
     print(network.output_shape)
     # A fully-connected layer of 256 units with 50% dropout on its inputs:
     network = lasagne.layers.DenseLayer(
-            lasagne.layers.dropout(network, p=.5),
+            lasagne.layers.dropout(network, p=p),
             num_units=frequency*2,
             nonlinearity=lasagne.nonlinearities.rectify)
     print(network.output_shape)
     
     network = lasagne.layers.DenseLayer(
-            lasagne.layers.dropout(network, p=.5),
+            lasagne.layers.dropout(network, p=p),
             num_units=frequency,
             nonlinearity=lasagne.nonlinearities.rectify)
     print(network.output_shape)
     
-    network = lasagne.layers.DenseLayer(
-            lasagne.layers.dropout(network, p=.5),
-            num_units=frequency,
-            nonlinearity=lasagne.nonlinearities.rectify)
-    print(network.output_shape)
+#    network = lasagne.layers.DenseLayer(
+#            lasagne.layers.dropout(network, p=p),
+#            num_units=frequency,
+#            nonlinearity=lasagne.nonlinearities.rectify)
+#    print(network.output_shape)
     # And, finally, the 10-unit output layer with 50% dropout on its inputs:
 #    network = lasagne.layers.DenseLayer(
 #            lasagne.layers.dropout(network, p=.5),
@@ -273,7 +277,7 @@ def build_cnn_mnist(input_var=None):
 #            nonlinearity=lasagne.nonlinearities.softmax)
             
     network = lasagne.layers.DenseLayer(
-            lasagne.layers.dropout(network, p=.5),
+            lasagne.layers.dropout(network, p=p),
             num_units=2,
             nonlinearity=lasagne.nonlinearities.softmax)
     print(network.output_shape)
@@ -330,7 +334,7 @@ def main(model='cnn_mnist', num_epochs=500):
     if model == 'cnn':
         network = build_cnn(input_var, lengthOfInputVector=lengthOfInputVector)
     elif model == 'cnn_mnist':
-        network = build_cnn_mnist(input_var)
+        network = build_cnn_mnist(input_var,dropout=True)
     else:
         print("Unrecognized model type {}".format(model))
         
@@ -373,6 +377,7 @@ def main(model='cnn_mnist', num_epochs=500):
     #prediction_for_gene_expres = theano.function([input_var],prediction) 
     
     # for prediction
+    test_prediction = lasagne.layers.get_output(network, deterministic=True)
     pred_class = T.argmax(test_prediction, axis=1)
     test_fn = theano.function([input_var],pred_class)
         
@@ -456,13 +461,23 @@ def main(model='cnn_mnist', num_epochs=500):
 #    return predicted_gene_expres, y_val
     # Optionally, you could now dump the network weights to a file like this:
     np.savez('heart_feature_model.npz', *lasagne.layers.get_all_param_values(network))
-        
+    
+    # network for prediction
+    print("Building model and compiling functions...")
+    if model == 'cnn':
+        prednetwork = build_cnn(input_var, lengthOfInputVector=lengthOfInputVector)
+    elif model == 'cnn_mnist':
+        prednetwork = build_cnn_mnist(input_var, dropout=False)
+    else:
+        print("Unrecognized model type {}".format(model))
+    
     # And load them again later on like this:
-    # with np.load('model.npz') as f:
-    #     param_values = [f['arr_%d' % i] for i in range(len(f.files))]
-    # lasagne.layers.set_all_param_values(network, param_values)
+    with np.load('heart_feature_model.npz') as f:
+        param_values = [f['arr_%d' % i] for i in range(len(f.files))]
+    lasagne.layers.set_all_param_values(prednetwork, param_values)
         
-    # Compute the accuracy
+    # Compute the accuracy    
+    test_prediction = lasagne.layers.get_output(prednetwork, deterministic=True)
     pred_class = T.argmax(test_prediction, axis=1)
     test_fn = theano.function([input_var],pred_class)
     inputs = X_test
@@ -470,9 +485,22 @@ def main(model='cnn_mnist', num_epochs=500):
     pred_class_label = test_fn(inputs)
     
     # compute the prediction error
+    # now compute error
+    # for 0
+    elem = [0]
+    label0 = find(y_test,elem)[0]
+    pred_true_neg = len(find(np.array(pred_class_label)[label0],elem)[0])
+    acc0 = 1.0*pred_true_neg/len(label0)
     
+    # for 1
+    elem = [1]
+    label1 = find(y_test,elem)[0]
+    pred_true_pos = len(find(np.array(pred_class_label)[label1],elem)[0])
+    acc1 = 1.0*pred_true_pos/len(label1)
+    
+    acc_test = 0.5*(acc0+acc1)
     #print(pred_class_label)
-    return pred_class_label, y_test
+    print("  test accuracy:\t\t{:.2f} %".format(acc_test*100))
 
 def prediction(model='cnn_mnist'):
     # load the test data for prediction
@@ -555,7 +583,7 @@ if __name__ == '__main__':
             kwargs['model'] = sys.argv[1]
         if len(sys.argv) > 2:
             kwargs['num_epochs'] = int(sys.argv[2])
-        y_pred, y_truth = main(**kwargs)
+        main(**kwargs)
 #        prediction()
 #        accuracy()
         
